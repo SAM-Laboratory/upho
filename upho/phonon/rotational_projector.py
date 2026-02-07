@@ -153,69 +153,124 @@ class RotationalProjector:
             rotations_cart.append(rotation_cart)
         return np.array(rotations_cart)
 
+    
     def project_vectors(self, vectors, kpoint, arm_transformation):
-        """
-
-        Parameters
-        ----------
-        vectors : Vectors without phase factors.
-        kpoint : K point in fractional coordinates for SC.
-        arm_transformation : 3 x 3 array
-            Matrix to get "kpoint" from the representative of the star.
-
-        TODO
-        ----
-        To be modified for nonsymmorphic space groups.
-        """
         rotations, translations = self._symmetry.get_group_of_wave_vector(kpoint)
 
         factor_system = self.calculate_factor_system(rotations, translations, kpoint)
         if not self.is_trivial_factor_system(factor_system):
-            errmsg = (
+            raise ValueError(
                 "The current factor system is not trivial.\n"
                 "So far the code cannot treat nontrivial factor system correctly\n"
                 "(even if it is p-equivalent to the trivial system)."
             )
-            raise ValueError(errmsg)
 
         self._create_mappings(rotations, translations)
 
-        characters = self._assign_characters_to_rotations(
-            rotations, arm_transformation)
-
+        characters = self._assign_characters_to_rotations(rotations, arm_transformation)
         rotations_cart = self._create_rotations_cart(rotations)
 
         ir_dimensions = self._ir_dimensions
-
         natoms = self._atoms.get_number_of_atoms()
-        ndim = kpoint.shape[0]  # The number of dimensions of space
+        ndim = kpoint.shape[0]
         order = rotations.shape[0]
 
-        expanded_mappings_inv = self._mappings_modifier.expand_mappings(
-            ndim, is_inverse=True)
+        expanded_mappings_inv = self._mappings_modifier.expand_mappings(ndim, is_inverse=True)
 
-        # scaled_positions = self._atoms.get_scaled_positions()
-        # phases = np.exp(2.0j * np.pi * np.dot(scaled_positions, kpoint))
-        # phases = np.repeat(phases, ndim)
+        # Output: (nirreps, ...) + vectors.shape
+        nir = len(ir_dimensions)
+        projected_vectors = np.zeros((nir,) + vectors.shape, dtype=vectors.dtype)
 
-        shape = (len(ir_dimensions), ) + vectors.shape
-        projected_vectors = np.zeros(shape, dtype=vectors.dtype)
-        for i, (r, expanded_mapping_inv) in enumerate(zip(rotations_cart, expanded_mappings_inv)):
-            tmp = vectors[..., expanded_mapping_inv, :]
+        # Precompute conj(characters) once
+        char_conj = np.conj(characters)  # shape: (order, nir)
 
-            tmp2 = np.zeros_like(vectors)
-            for iatom in range(natoms):
-                tmp2[..., (3 * iatom):(3 * (iatom + 1)), :] = np.einsum(
-                    'ij,...jk->...ik', r, tmp[..., (3 * iatom):(3 * (iatom + 1)), :]
-                )
+        # Shapes
+        # vectors: (..., natoms*ndim, nbands) and ndim is presumably 3 in your block logic
+        # We'll treat as (..., natoms, ndim, nbands)
+        for i, (r, mapping_inv) in enumerate(zip(rotations_cart, expanded_mappings_inv)):
+            tmp = vectors[..., mapping_inv, :]                      # (..., natoms*ndim, nbands)
+            tmp = tmp.reshape(*tmp.shape[:-2], natoms, ndim, tmp.shape[-1])  # (..., natoms, ndim, nbands)
 
-            projected_vectors += (tmp2[None].T * np.conj(characters[i, :])).T
+            # Apply rotation r (ndim x ndim) to the ndim axis
+            # out: (..., natoms, ndim, nbands)
+            tmp2 = np.einsum("ij,...ajb->...aib", r, tmp, optimize=True)
 
-        # projected_vectors *= phases[None, :, None]
-        projected_vectors = (projected_vectors.T * ir_dimensions[:]).T
+            tmp2 = tmp2.reshape(*vectors.shape)  # back to (..., natoms*ndim, nbands)
+
+            # Multiply by character weights and accumulate into each irrep:
+            # projected_vectors[k] += tmp2 * conj(characters[i, k])
+            projected_vectors += tmp2[None, ...] * char_conj[i, :, None, None]
+
+        # Apply irrep dimensions + normalization
+        projected_vectors *= ir_dimensions[:, None, None]
         projected_vectors /= order
 
         return projected_vectors
+
+
+    # def project_vectors(self, vectors, kpoint, arm_transformation):
+    #     """
+
+    #     Parameters
+    #     ----------
+    #     vectors : Vectors without phase factors.
+    #     kpoint : K point in fractional coordinates for SC.
+    #     arm_transformation : 3 x 3 array
+    #         Matrix to get "kpoint" from the representative of the star.
+
+    #     TODO
+    #     ----
+    #     To be modified for nonsymmorphic space groups.
+    #     """
+    #     rotations, translations = self._symmetry.get_group_of_wave_vector(kpoint)
+
+    #     factor_system = self.calculate_factor_system(rotations, translations, kpoint)
+    #     if not self.is_trivial_factor_system(factor_system):
+    #         errmsg = (
+    #             "The current factor system is not trivial.\n"
+    #             "So far the code cannot treat nontrivial factor system correctly\n"
+    #             "(even if it is p-equivalent to the trivial system)."
+    #         )
+    #         raise ValueError(errmsg)
+
+    #     self._create_mappings(rotations, translations)
+
+    #     characters = self._assign_characters_to_rotations(
+    #         rotations, arm_transformation)
+
+    #     rotations_cart = self._create_rotations_cart(rotations)
+
+    #     ir_dimensions = self._ir_dimensions
+
+    #     natoms = self._atoms.get_number_of_atoms()
+    #     ndim = kpoint.shape[0]  # The number of dimensions of space
+    #     order = rotations.shape[0]
+
+    #     expanded_mappings_inv = self._mappings_modifier.expand_mappings(
+    #         ndim, is_inverse=True)
+
+    #     # scaled_positions = self._atoms.get_scaled_positions()
+    #     # phases = np.exp(2.0j * np.pi * np.dot(scaled_positions, kpoint))
+    #     # phases = np.repeat(phases, ndim)
+
+    #     shape = (len(ir_dimensions), ) + vectors.shape
+    #     projected_vectors = np.zeros(shape, dtype=vectors.dtype)
+    #     for i, (r, expanded_mapping_inv) in enumerate(zip(rotations_cart, expanded_mappings_inv)):
+    #         tmp = vectors[..., expanded_mapping_inv, :]
+
+    #         tmp2 = np.zeros_like(vectors)
+    #         for iatom in range(natoms):
+    #             tmp2[..., (3 * iatom):(3 * (iatom + 1)), :] = np.einsum(
+    #                 'ij,...jk->...ik', r, tmp[..., (3 * iatom):(3 * (iatom + 1)), :]
+    #             )
+
+    #         projected_vectors += (tmp2[None].T * np.conj(characters[i, :])).T
+
+    #     # projected_vectors *= phases[None, :, None]
+    #     projected_vectors = (projected_vectors.T * ir_dimensions[:]).T
+    #     projected_vectors /= order
+
+    #     return projected_vectors
 
     def get_ir_labels(self):
         return self._ir_labels

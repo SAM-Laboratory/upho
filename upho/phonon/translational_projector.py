@@ -88,22 +88,49 @@ class TranslationalProjector:
 
         return mappings
 
+    # def project_vectors(self, vectors, kpoint):
+    #     """Project vectors onto kpoint
+
+    #     Parameters
+    #     ----------
+    #     vectors : (..., natoms * ndim, nbands) array
+    #         Vectors for SC at kpoint.  Each "column" vector is an eigenvector.
+    #     kpoint : (ndim) array
+    #         Reciprocal space point in fractional coordinates for SC.
+
+    #     Returns
+    #     -------
+    #     projected_vectors : (..., natoms_primitive * ndim, nbands) array
+    #         Projection of the given vectors.
+    #         This is reduced into the primitive cell.
+    #     """
+    #     ncells = self._ncells
+    #     ndim = self._ndim
+    #     primitive = self._primitive
+
+    #     p2s_map = primitive.get_primitive_to_supercell_map()
+    #     indices = MappingsModifier(p2s_map).expand_mappings(ndim)
+
+    #     expanded_mappings = self._expanded_mappings
+
+    #     shape = list(vectors.shape)
+    #     shape[-2] //= ncells
+    #     projected_vectors = np.zeros(shape, dtype=vectors.dtype)
+
+    #     for expanded_mapping in expanded_mappings:
+    #         jndices = expanded_mapping.take(indices)
+    #         projected_vectors += vectors.take(jndices, axis=-2)
+
+    #     # The following intend;
+    #     #     # Definition of projection operators
+    #     #     projected_vectors /= ncells
+    #     #     # Reduction into primitive
+    #     #     projected_vectors *= np.sqrt(ncells)
+    #     projected_vectors /= np.sqrt(ncells)
+
+    #     return projected_vectors
+
     def project_vectors(self, vectors, kpoint):
-        """Project vectors onto kpoint
-
-        Parameters
-        ----------
-        vectors : (..., natoms * ndim, nbands) array
-            Vectors for SC at kpoint.  Each "column" vector is an eigenvector.
-        kpoint : (ndim) array
-            Reciprocal space point in fractional coordinates for SC.
-
-        Returns
-        -------
-        projected_vectors : (..., natoms_primitive * ndim, nbands) array
-            Projection of the given vectors.
-            This is reduced into the primitive cell.
-        """
         ncells = self._ncells
         ndim = self._ndim
         primitive = self._primitive
@@ -113,22 +140,28 @@ class TranslationalProjector:
 
         expanded_mappings = self._expanded_mappings
 
-        shape = list(vectors.shape)
-        shape[-2] //= ncells
-        projected_vectors = np.zeros(shape, dtype=vectors.dtype)
+        # Make sure indices are intp (fast path for NumPy indexing)
+        indices = np.asarray(indices, dtype=np.intp)
 
-        for expanded_mapping in expanded_mappings:
-            jndices = expanded_mapping.take(indices)
-            projected_vectors += vectors.take(jndices, axis=-2)
+        # Stack jndices for all mappings once: (ncells, nproj)
+        # where nproj = natoms_primitive * ndim
+        jndices_all = np.stack(
+            [np.asarray(em, dtype=np.intp).take(indices) for em in expanded_mappings],
+            axis=0
+        )
 
-        # The following intend;
-        #     # Definition of projection operators
-        #     projected_vectors /= ncells
-        #     # Reduction into primitive
-        #     projected_vectors *= np.sqrt(ncells)
+        # Take all in one go:
+        # result shape: (..., ncells, nproj, nbands)
+        picked = np.take(vectors, jndices_all, axis=-2)
+
+        # Sum over ncells axis -> (..., nproj, nbands)
+        projected_vectors = picked.sum(axis=-3)
+
+        # Normalization (same as your loop version)
         projected_vectors /= np.sqrt(ncells)
 
         return projected_vectors
+
 
     def project_vectors_full(self, vectors, kpoint):
         """

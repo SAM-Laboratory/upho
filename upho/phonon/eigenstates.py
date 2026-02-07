@@ -206,9 +206,13 @@ class Eigenstates:
 
         self._dynamical_matrix.set_dynamical_matrix(q_sc)
         dm = self._dynamical_matrix.get_dynamical_matrix()
-        with TimeMeasurer('Solve eigenproblem'):
-            eigvals, eigvecs = np.linalg.eigh(dm)
 
+        from scipy.linalg import eigh  # faster
+
+        with TimeMeasurer('Solve eigenproblem'):
+            eigvals, eigvecs = eigh(dm, driver="evr")
+            # eigvals, eigvecs = np.linalg.eigh(dm)
+        
         weights = {}
 
         with TimeMeasurer('Calculate weights for wavevectors'):
@@ -288,16 +292,20 @@ class Eigenstates:
         projected_vectors = self._rotational_projector.project_vectors(
             vectors, kpoint, transformation_matrix)
 
-        nirreps, natoms_p, nelms, tmp, nbands = projected_vectors.shape
+        # nirreps, natoms_p, nelms, tmp, nbands = projected_vectors.shape
+        # projected_vectors: (nirreps, natoms_p, nelms, tmp, nbands)
 
-        shape = (nirreps, natoms_p, nelms, natoms_p, nelms, nbands)
-        weights = np.zeros(shape, dtype=complex)
-        for i in range(nirreps):
-            for j in range(nbands):
-                weights[i, ..., j] = np.inner(
-                    np.conj(projected_vectors[i, ..., j]), projected_vectors[i, ..., j])
+        # weights: (nirreps, natoms_p, nelms, natoms_p, nelms, nbands)
+        weights = np.einsum("iaetb,iAEtb->iaeAEb", projected_vectors.conj(), projected_vectors, optimize=True)
 
-        return weights, projected_vectors
+        # shape = (nirreps, natoms_p, nelms, natoms_p, nelms, nbands)
+        # weights = np.zeros(shape, dtype=complex)
+        # for i in range(nirreps):
+        #     for j in range(nbands):
+        #         weights[i, ..., j] = np.inner(
+        #             np.conj(projected_vectors[i, ..., j]), projected_vectors[i, ..., j])
+
+        return weights.real, projected_vectors
 
     def check_rotational_projected_vectors(self, rot_proj_vectors, vectors):
         sum_rot_proj_vectors = np.sum(rot_proj_vectors, axis=0)
@@ -323,50 +331,62 @@ class Eigenstates:
         vectors_elements = elemental_projector.project_vectors(vectors)
         return vectors_elements
 
+    # def _create_weights_e1(self, vectors_elements, kpoint):
+    #     """
+
+    #     Parameters
+    #     ----------
+    #     vectors_elements : (natoms_p, nelms, natoms_u * ndims, nbands) array
+    #     kpoint : Reciprocal space point in fractional coordinates for SC.
+
+    #     Returns
+    #     -------
+    #     weights_e1 : (natoms_p, nelms, natoms_p, nelms, nbands) array
+    #         Elemental weights.
+    #     projected_vectors : (natoms_p, nelms, natoms_u * ndims, nbands) array
+    #         Elemental projected vectors.
+    #     """
+    #     translational_projector = self._translational_projector
+
+    #     projected_vectors = translational_projector.project_vectors(
+    #         vectors=vectors_elements, kpoint=kpoint)
+
+    #     natoms_p, nelms, tmp, nbands = projected_vectors.shape
+
+    #     weights_e1 = np.zeros((natoms_p, nelms, natoms_p, nelms, nbands), dtype=complex)
+    #     for i in range(nbands):
+    #         weights_e1[..., i] = np.inner(
+    #             np.conj(projected_vectors[..., i]), projected_vectors[..., i])
+
+    #     return weights_e1, projected_vectors
     def _create_weights_e1(self, vectors_elements, kpoint):
-        """
+        pv = self._translational_projector.project_vectors(vectors=vectors_elements, kpoint=kpoint)
+        weights_e1 = np.einsum("aetb,AEtb->aeAEb", pv.conj(), pv, optimize=True)
+        return weights_e1.real, pv
 
-        Parameters
-        ----------
-        vectors_elements : (natoms_p, nelms, natoms_u * ndims, nbands) array
-        kpoint : Reciprocal space point in fractional coordinates for SC.
 
-        Returns
-        -------
-        weights_e1 : (natoms_p, nelms, natoms_p, nelms, nbands) array
-            Elemental weights.
-        projected_vectors : (natoms_p, nelms, natoms_u * ndims, nbands) array
-            Elemental projected vectors.
-        """
-        translational_projector = self._translational_projector
+    # def _create_weights_e2(self, vectors_elements, weights_total):
+    #     """
+        
+    #     Parameters
+    #     ----------
+    #     vectors_elements : (natoms_p, nelms, natoms_u * ndims, nbands) array
+    #     weights_total : (nbands) array
 
-        projected_vectors = translational_projector.project_vectors(
-            vectors=vectors_elements, kpoint=kpoint)
-
-        natoms_p, nelms, tmp, nbands = projected_vectors.shape
-
-        weights_e1 = np.zeros((natoms_p, nelms, natoms_p, nelms, nbands), dtype=complex)
-        for i in range(nbands):
-            weights_e1[..., i] = np.inner(
-                np.conj(projected_vectors[..., i]), projected_vectors[..., i])
-
-        return weights_e1, projected_vectors
+    #     Returns
+    #     -------
+    #     weights_e2 : (natoms_p, nelms, nbands) array
+    #     """
+    #     weights_tmp = np.linalg.norm(vectors_elements, axis=2) ** 2  # (natoms_p, nelms, nbands)
+    #     weights_e2 = weights_total * weights_tmp
+    #     return weights_e2
 
     def _create_weights_e2(self, vectors_elements, weights_total):
-        """
-        
-        Parameters
-        ----------
-        vectors_elements : (natoms_p, nelms, natoms_u * ndims, nbands) array
-        weights_total : (nbands) array
+        # weights_tmp: (natoms_p, nelms, nbands) real
+        # weights_tmp = np.einsum("...tb,...tb->...b", vectors_elements.conj(), vectors_elements, optimize=True).real
+        weights_tmp = np.sum(np.abs(vectors_elements)**2, axis=2)  # (natoms_p, nelms, nbands)
+        return weights_tmp * weights_total[None, None, :]
 
-        Returns
-        -------
-        weights_e2 : (natoms_p, nelms, nbands) array
-        """
-        weights_tmp = np.linalg.norm(vectors_elements, axis=2) ** 2  # (natoms_p, nelms, nbands)
-        weights_e2 = weights_total * weights_tmp
-        return weights_e2
 
     def get_distance(self):
         return self._distance

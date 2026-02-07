@@ -109,6 +109,26 @@ class ElementWeightsCalculator(object):
 
         return weights
 
+    # def project_vectors(self, vectors, ndims=3):
+    #     map_atoms_u2p = self._map_atoms_u2p
+    #     map_elements = self._map_elements
+
+    #     natoms_p = len(map_atoms_u2p)
+    #     num_elements = len(map_elements)
+
+    #     tmp = np.zeros_like(vectors[None, None])  # Add two dimensions
+    #     projected_vectors = (
+    #         np.repeat(np.repeat(tmp, natoms_p, axis=0), num_elements, axis=1))
+
+    #     for ip, lp in enumerate(map_atoms_u2p):
+    #         for ie, le in enumerate(map_elements):
+    #             indices_tmp = sorted(set(lp) & set(le))
+    #             indices = MappingsModifier(indices_tmp).expand_mappings(ndims)
+    #             if len(indices) > 0:  # The element "le" exists on the sublattice.
+    #                 projected_vectors[ip, ie, indices] = vectors[indices]
+
+    #     return projected_vectors
+
     def project_vectors(self, vectors, ndims=3):
         map_atoms_u2p = self._map_atoms_u2p
         map_elements = self._map_elements
@@ -116,15 +136,18 @@ class ElementWeightsCalculator(object):
         natoms_p = len(map_atoms_u2p)
         num_elements = len(map_elements)
 
-        tmp = np.zeros_like(vectors[None, None])  # Add two dimensions
-        projected_vectors = (
-            np.repeat(np.repeat(tmp, natoms_p, axis=0), num_elements, axis=1))
+        projected_vectors = np.zeros((natoms_p, num_elements) + vectors.shape, dtype=vectors.dtype)
 
-        for ip, lp in enumerate(map_atoms_u2p):
-            for ie, le in enumerate(map_elements):
-                indices_tmp = sorted(set(lp) & set(le))
-                indices = MappingsModifier(indices_tmp).expand_mappings(ndims)
-                if len(indices) > 0:  # The element "le" exists on the sublattice.
-                    projected_vectors[ip, ie, indices] = vectors[indices]
+        atom_sets = [set(lp) for lp in map_atoms_u2p]
+        elem_sets = [set(le) for le in map_elements]
+
+        for ip, lp_set in enumerate(atom_sets):
+            for ie, le_set in enumerate(elem_sets):
+                indices_tmp = sorted(lp_set & le_set)
+                if indices_tmp:
+                    indices = MappingsModifier(indices_tmp).expand_mappings(ndims)
+                    if len(indices) > 0:
+                        projected_vectors[ip, ie, indices] = vectors[indices]
 
         return projected_vectors
+
