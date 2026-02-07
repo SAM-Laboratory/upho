@@ -78,6 +78,6 @@ setup(
     #
     # For an analysis of "install_requires" vs pip's requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['phonopy>=2.7.0'],  # Optional
+    install_requires=['phonopy>=2.7.0, <=2.8.0'], 
 
     scripts=scripts)
