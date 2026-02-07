@@ -8,12 +8,12 @@ Band unfolding for phonons (http://yuzie007.github.io/upho/)
 
 - numpy
 - h5py
-- phonopy>=2.7.0
+- phonopy>=2.7.0, <=2.8.0
 
 ## Install
 
 ```bash
-pip install git+https://github.com/yuzie007/upho.git@v0.6.6
+pip install git+https://github.com/yuzie007/upho.git
 ```
 
 ## Usage and Tutorial
